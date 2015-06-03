@@ -16,18 +16,20 @@
 
 package com.google.javascript.jscomp;
 
-import com.google.common.collect.Lists;
-import com.google.common.collect.Sets;
+import static com.google.common.truth.Truth.assertThat;
+
 import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
 import com.google.javascript.rhino.Node;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Set;
 
 /**
  * @author johnlenz@google.com (John Lenz)
  *
  */
-public class NormalizeTest extends CompilerTestCase {
+public final class NormalizeTest extends CompilerTestCase {
 
   private static final String EXTERNS = "var window;";
 
@@ -147,6 +149,7 @@ public class NormalizeTest extends CompilerTestCase {
   }
 
   public void testForIn2() {
+    setExpectParseWarningsThisTest();
     // Verify vars are extracted from the FOR-IN node.
     test("for(var a = foo() in b) foo()",
          "var a = foo(); for(a in b) foo()");
@@ -342,37 +345,29 @@ public class NormalizeTest extends CompilerTestCase {
   }
 
   public void testIssue166a() {
-    test("try { throw 1 } catch(e) { /** @suppress {duplicate} */ var e=2 }",
-         "try { throw 1 } catch(e) { var e=2 }",
+    testError("try { throw 1 } catch(e) { /** @suppress {duplicate} */ var e=2 }",
          Normalize.CATCH_BLOCK_VAR_ERROR);
   }
 
   public void testIssue166b() {
-    test("function a() {" +
+    testError("function a() {" +
          "try { throw 1 } catch(e) { /** @suppress {duplicate} */ var e=2 }" +
          "};",
-         "function a() {" +
-         "try { throw 1 } catch(e) { var e=2 }" +
-         "}",
          Normalize.CATCH_BLOCK_VAR_ERROR);
   }
 
   public void testIssue166c() {
-    test("var e = 0; try { throw 1 } catch(e) {" +
-             "/** @suppress {duplicate} */ var e=2 }",
-         "var e = 0; try { throw 1 } catch(e) { var e=2 }",
-         Normalize.CATCH_BLOCK_VAR_ERROR);
+    testError("var e = 0; try { throw 1 } catch(e) {" +
+        "/** @suppress {duplicate} */ var e=2 }",
+        Normalize.CATCH_BLOCK_VAR_ERROR);
   }
 
   public void testIssue166d() {
-    test("function a() {" +
-         "var e = 0; try { throw 1 } catch(e) {" +
-             "/** @suppress {duplicate} */ var e=2 }" +
-         "};",
-         "function a() {" +
-         "var e = 0; try { throw 1 } catch(e) { var e=2 }" +
-         "}",
-         Normalize.CATCH_BLOCK_VAR_ERROR);
+    testError("function a() {" +
+        "var e = 0; try { throw 1 } catch(e) {" +
+            "/** @suppress {duplicate} */ var e=2 }" +
+        "};",
+        Normalize.CATCH_BLOCK_VAR_ERROR);
   }
 
   public void testIssue166e() {
@@ -397,13 +392,14 @@ public class NormalizeTest extends CompilerTestCase {
   public void testNormalizeSyntheticCode() {
     Compiler compiler = new Compiler();
     compiler.init(
-        Lists.<SourceFile>newArrayList(),
-        Lists.<SourceFile>newArrayList(), new CompilerOptions());
-    Node code = Normalize.parseAndNormalizeSyntheticCode(
-        compiler, "function f(x) {} function g(x) {}", "prefix_");
+        new ArrayList<SourceFile>(),
+         new ArrayList<SourceFile>(), new CompilerOptions());
+    String code = "function f(x) {} function g(x) {}";
+    Node ast = compiler.parseSyntheticCode(code);
+    Normalize.normalizeSyntheticCode(compiler, ast, "prefix_");
     assertEquals(
         "function f(x$$prefix_0){}function g(x$$prefix_1){}",
-        compiler.toSource(code));
+        compiler.toSource(ast));
   }
 
   public void testIsConstant() throws Exception {
@@ -411,7 +407,7 @@ public class NormalizeTest extends CompilerTestCase {
     Node n = getLastCompiler().getRoot();
 
     Set<Node> constantNodes = findNodesWithProperty(n, Node.IS_CONSTANT_NAME);
-    assertEquals(2, constantNodes.size());
+    assertThat(constantNodes).hasSize(2);
     for (Node hasProp : constantNodes) {
       assertEquals("CONST", hasProp.getString());
     }
@@ -422,7 +418,7 @@ public class NormalizeTest extends CompilerTestCase {
     Node n = getLastCompiler().getRoot();
 
     Set<Node> constantNodes = findNodesWithProperty(n, Node.IS_CONSTANT_NAME);
-    assertEquals(2, constantNodes.size());
+    assertThat(constantNodes).hasSize(2);
     for (Node hasProp : constantNodes) {
       assertEquals("CONST", hasProp.getString());
     }
@@ -433,7 +429,7 @@ public class NormalizeTest extends CompilerTestCase {
     Node n = getLastCompiler().getRoot();
 
     Set<Node> constantNodes = findNodesWithProperty(n, Node.IS_CONSTANT_NAME);
-    assertEquals(2, constantNodes.size());
+    assertThat(constantNodes).hasSize(2);
     for (Node hasProp : constantNodes) {
       assertEquals("CONST", hasProp.getString());
     }
@@ -445,7 +441,7 @@ public class NormalizeTest extends CompilerTestCase {
     Node n = getLastCompiler().getRoot();
 
     Set<Node> constantNodes = findNodesWithProperty(n, Node.IS_CONSTANT_NAME);
-    assertEquals(2, constantNodes.size());
+    assertThat(constantNodes).hasSize(2);
     for (Node hasProp : constantNodes) {
       assertEquals("CONST", hasProp.getString());
     }
@@ -458,18 +454,20 @@ public class NormalizeTest extends CompilerTestCase {
     Node n = getLastCompiler().getRoot();
 
     Set<Node> constantNodes = findNodesWithProperty(n, Node.IS_CONSTANT_NAME);
-    assertEquals(2, constantNodes.size());
+    assertThat(constantNodes).hasSize(2);
     for (Node hasProp : constantNodes) {
       assertEquals("CONST", hasProp.getString());
     }
   }
 
   public void testExposeSimple() {
+    setExpectParseWarningsThisTest();
     test("var x = {}; /** @expose */ x.y = 3; x.y = 5;",
          "var x = {}; x['y'] = 3; x['y'] = 5;");
   }
 
   public void testExposeComplex() {
+    setExpectParseWarningsThisTest();
     test(
         "var x = {/** @expose */ a: 1, b: 2};"
         + "x.a = 3; /** @expose */ x.b = 5;",
@@ -478,7 +476,7 @@ public class NormalizeTest extends CompilerTestCase {
   }
 
   private Set<Node> findNodesWithProperty(Node root, final int prop) {
-    final Set<Node> set = Sets.newHashSet();
+    final Set<Node> set = new HashSet<>();
     NodeTraversal.traverse(
         getLastCompiler(), root, new AbstractPostOrderCallback() {
         @Override
@@ -539,7 +537,7 @@ public class NormalizeTest extends CompilerTestCase {
       return new CompilerPass() {
         @Override
         public void process(Node externs, Node root) {
-          new CollapseProperties(compiler, false, true).process(externs, root);
+          new CollapseProperties(compiler).process(externs, root);
         }
       };
     }

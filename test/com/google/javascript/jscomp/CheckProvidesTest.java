@@ -23,7 +23,7 @@ import com.google.javascript.jscomp.CheckLevel;
  * Tests for {@link CheckProvides}.
  *
  */
-public class CheckProvidesTest extends CompilerTestCase {
+public final class CheckProvidesTest extends CompilerTestCase {
   @Override
   protected CompilerPass getProcessor(Compiler compiler) {
     return new CheckProvides(compiler, CheckLevel.WARNING);
@@ -60,6 +60,12 @@ public class CheckProvidesTest extends CompilerTestCase {
                                "/** @constructor */ goog.X = function(){};"};
     String warning = "missing goog.provide('goog.X')";
     test(js, js, null, MISSING_PROVIDE_WARNING, warning);
+  }
+
+  public void testMissingGoogProvideWithinGoogScope(){
+    String[] js = new String[]{
+        "/** @constructor */ $jscomp.scope.bar = function() {};"};
+    test(js, js);
   }
 
   public void testGoogProvideInWrongFileShouldCreateWarning(){

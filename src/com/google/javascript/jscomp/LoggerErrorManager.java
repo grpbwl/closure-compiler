@@ -25,7 +25,7 @@ import java.util.logging.Logger;
  * are logged at the WARNING level.
  *
  */
-public class LoggerErrorManager extends BasicErrorManager {
+public final class LoggerErrorManager extends BasicErrorManager {
   private final MessageFormatter formatter;
   private final Logger logger;
 
@@ -41,7 +41,7 @@ public class LoggerErrorManager extends BasicErrorManager {
    * Creates an instance with a source-less error formatter.
    */
   public LoggerErrorManager(Logger logger) {
-    this(ErrorFormat.SOURCELESS.toFormatter(null, false), logger);
+    this(LightweightMessageFormatter.withoutSource(), logger);
   }
 
   @Override

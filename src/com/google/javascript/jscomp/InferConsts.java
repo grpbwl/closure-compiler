@@ -17,7 +17,6 @@
 package com.google.javascript.jscomp;
 
 import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
-import com.google.javascript.jscomp.Scope.Var;
 import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
 
@@ -53,7 +52,7 @@ class InferConsts implements CompilerPass {
     }
 
     Scope globalExternsScope =
-        new SyntacticScopeCreator(compiler).createScope(externs, null);
+        SyntacticScopeCreator.makeUntyped(compiler).createScope(externs, null);
     for (Var v : globalExternsScope.getAllSymbols()) {
       considerVar(v, null);
     }
@@ -69,7 +68,8 @@ class InferConsts implements CompilerPass {
     } else if (nameNode != null &&
         compiler.getCodingConvention().isConstant(nameNode.getString())) {
       nameNode.putBooleanProp(Node.IS_CONSTANT_VAR, true);
-    } else if (refCollection != null &&
+    } else if (nameNode != null &&
+               refCollection != null &&
                refCollection.isWellDefined() &&
                refCollection.isAssignedOnceInLifetime() &&
                refCollection.firstReferenceIsAssigningDeclaration()) {

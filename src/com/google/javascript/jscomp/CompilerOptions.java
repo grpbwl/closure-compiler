@@ -17,10 +17,10 @@
 package com.google.javascript.jscomp;
 
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
+import com.google.common.collect.LinkedHashMultimap;
 import com.google.common.collect.Multimap;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
@@ -28,7 +28,9 @@ import com.google.javascript.rhino.SourcePosition;
 
 import java.io.Serializable;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -58,6 +60,13 @@ public class CompilerOptions implements Serializable, Cloneable {
   private static final long serialVersionUID = 7L;
 
   /**
+   * The warning classes that are available.
+   */
+  protected DiagnosticGroups getDiagnosticGroups() {
+    return new DiagnosticGroups();
+  }
+
+  /**
    * The JavaScript language version accepted.
    */
   private LanguageMode languageIn;
@@ -68,9 +77,59 @@ public class CompilerOptions implements Serializable, Cloneable {
   private LanguageMode languageOut;
 
   /**
+   * Allows ES6 compilation output.
+   */
+  private boolean allowEs6Out;
+
+  /**
+   * Allow ES6 as the output language.
+   * WARNING: Enabling this option may cause the compiler to crash
+   *     or produce incorrect output.
+   */
+  public void setAllowEs6Out(boolean value) {
+    allowEs6Out = value;
+  }
+
+  public boolean getAllowEs6Out() {
+    return allowEs6Out;
+  }
+
+  /**
+   * If true, transpile ES6 to ES3 only. All others passes will be skipped.
+   */
+  boolean transpileOnly;
+
+  /**
+   * Only do transpilation, don't inject es6_runtime.js or
+   * do any optimizations (this is useful for per-file transpilation).
+   */
+  public void setTranspileOnly(boolean value) {
+    transpileOnly = value;
+  }
+
+  /**
    * Whether the compiler accepts the `const' keyword.
    */
   boolean acceptConstKeyword;
+
+  /**
+   * Whether the compiler accepts type syntax ({@code var foo: string;}).
+   */
+  boolean acceptTypeSyntax;
+
+  /**
+   * Whether to infer consts. This should not be configurable by
+   * external clients. This is a transitional flag for a new type
+   * of const analysis.
+   *
+   * TODO(nicksantos): Remove this option.
+   */
+  boolean inferConsts = true;
+
+  // TODO(tbreisacher): Remove this method after ctemplate issues are solved.
+  public void setInferConst(boolean value) {
+    inferConsts = value;
+  }
 
   /**
    * Whether the compiler should assume that a function's "this" value
@@ -93,7 +152,7 @@ public class CompilerOptions implements Serializable, Cloneable {
    */
   public boolean ideMode;
 
-  boolean saveDataStructures = false;
+  private boolean parseJsDocDocumentation = false;
 
   /**
    * Even if checkTypes is disabled, clients might want to still infer types.
@@ -108,11 +167,6 @@ public class CompilerOptions implements Serializable, Cloneable {
    * Configures the compiler to skip as many passes as possible.
    */
   boolean skipAllPasses;
-
-  /**
-   * If true, name anonymous functions only. All others passes will be skipped.
-   */
-  boolean nameAnonymousFunctionsOnly;
 
   /**
    * Configures the compiler to run expensive sanity checks after
@@ -166,11 +220,15 @@ public class CompilerOptions implements Serializable, Cloneable {
     reportMissingOverride = level;
   }
 
-  /** Checks for missing goog.require() calls **/
-  public CheckLevel checkRequires;
-
+  /**
+   * Deprecated. Use
+   * {@code setWarningLevel(DiagnosticGroups.MISSING_REQUIRE, CheckLevel.WARNING);}
+   * or
+   * {@code setWarningLevel(DiagnosticGroups.MISSING_REQUIRE, CheckLevel.ERROR);}
+   */
+  @Deprecated
   public void setCheckRequires(CheckLevel level) {
-    checkRequires = level;
+    setWarningLevel(DiagnosticGroups.MISSING_REQUIRE, level);
   }
 
   public CheckLevel checkProvides;
@@ -257,8 +315,6 @@ public class CompilerOptions implements Serializable, Cloneable {
   // Optimizations
   //--------------------------------
 
-  boolean aggressiveRenaming;
-
   /** Prefer commas over semicolons when doing statement fusion */
   boolean aggressiveFusion;
 
@@ -274,6 +330,13 @@ public class CompilerOptions implements Serializable, Cloneable {
   /** Inlines global functions */
   public boolean inlineFunctions;
 
+  /**
+   * For projects that want to avoid the creation of giant functions after
+   * inlining.
+   */
+  int maxFunctionSizeAfterInlining;
+  static final int UNLIMITED_FUN_SIZE_AFTER_INLINING = -1;
+
   /** Inlines functions defined in local scopes */
   public boolean inlineLocalFunctions;
 
@@ -285,6 +348,16 @@ public class CompilerOptions implements Serializable, Cloneable {
 
   /** Move code to a deeper module */
   public boolean crossModuleCodeMotion;
+
+  /**
+   * Don't generate stub functions when moving methods deeper.
+   *
+   * Note, switching on this option may break existing code that depends on
+   * enumerating prototype methods for mixin behavior, such as goog.mixin or
+   * goog.object.extend, since the prototype assignments will be removed from
+   * the parent module and moved to a later module.
+   **/
+  boolean crossModuleCodeMotionNoStubMethods;
 
   /**
    * Whether when module B depends on module A and module B declares a symbol,
@@ -328,8 +401,14 @@ public class CompilerOptions implements Serializable, Cloneable {
     this.checkMissingReturn = level;
   }
 
+  public enum ExtractPrototypeMemberDeclarationsMode {
+    OFF,
+    USE_GLOBAL_TEMP,
+    USE_IIFE
+  }
+
   /** Extracts common prototype member declarations */
-  public boolean extractPrototypeMemberDeclarations;
+  ExtractPrototypeMemberDeclarationsMode extractPrototypeMemberDeclarations;
 
   /** Removes unused member prototypes */
   public boolean removeUnusedPrototypeProperties;
@@ -339,6 +418,9 @@ public class CompilerOptions implements Serializable, Cloneable {
 
   /** Removes unused member properties */
   public boolean removeUnusedClassProperties;
+
+  /** Removes unused constructor properties */
+  boolean removeUnusedConstructorProperties;
 
   /** Removes unused variables */
   public boolean removeUnusedVars;
@@ -443,10 +525,7 @@ public class CompilerOptions implements Serializable, Cloneable {
   public VariableRenamingPolicy variableRenaming;
 
   /** Controls which properties get renamed. */
-  public PropertyRenamingPolicy propertyRenaming;
-
-  /** Should we use affinity information when generating property names. */
-  boolean propertyAffinity;
+  PropertyRenamingPolicy propertyRenaming;
 
   /** Controls label renaming. */
   public boolean labelRenaming;
@@ -489,9 +568,6 @@ public class CompilerOptions implements Serializable, Cloneable {
     renamePrefixNamespaceAssumeCrossModuleNames = assume;
   }
 
-  /** Aliases true, false, and null to variables with shorter names. */
-  public boolean aliasKeywords;
-
   /** Flattens multi-level property names (e.g. a$b = x) */
   public boolean collapseProperties;
 
@@ -501,9 +577,6 @@ public class CompilerOptions implements Serializable, Cloneable {
   public void setCollapseObjectLiterals(boolean enabled) {
     collapseObjectLiterals = enabled;
   }
-
-  /** Flattens multi-level property names on extern types (e.g. String$f = x) */
-  boolean collapsePropertiesOnExternTypes;
 
   /**
    * Devirtualize prototype method by rewriting them to be static calls that
@@ -546,7 +619,17 @@ public class CompilerOptions implements Serializable, Cloneable {
   /** Input anonymous function renaming map. */
   VariableMap inputAnonymousFunctionNamingMap;
 
-  /** Input variable renaming map. */
+  /**
+   * Input variable renaming map.
+   * <p>During renaming, the compiler uses this map and the inputPropertyMap to
+   * try to preserve renaming mappings from a previous compilation.
+   * The application is delta encoding: keeping the diff between consecutive
+   * versions of one's code small.
+   * The compiler does NOT guarantee to respect these maps; projects should not
+   * use these maps to prevent renaming or to select particular names.
+   * Point questioners to this post:
+   * http://closuretools.blogspot.com/2011/01/property-by-any-other-name-part-3.html
+   */
   VariableMap inputVariableMap;
 
   /** Input property renaming map. */
@@ -554,16 +637,6 @@ public class CompilerOptions implements Serializable, Cloneable {
 
   /** Whether to export test functions. */
   public boolean exportTestFunctions;
-
-  boolean specializeInitialModule;
-
-  /** Specialize the initial module at the cost of later modules */
-  public void setSpecializeInitialModule(boolean enabled) {
-    specializeInitialModule = enabled;
-  }
-
-  /** Whether to gather property names from types in externs. */
-  boolean gatherExternsFromTypes;
 
   /** Whether to declare globals declared in externs as properties on window */
   boolean declaredGlobalExternsOnWindow;
@@ -628,6 +701,9 @@ public class CompilerOptions implements Serializable, Cloneable {
   /** Processes AngularJS-specific annotations */
   boolean angularPass;
 
+  /** Processes Polymer calls */
+  boolean polymerPass;
+
   /** Remove goog.abstractMethod assignments. */
   boolean removeAbstractMethods;
 
@@ -650,7 +726,7 @@ public class CompilerOptions implements Serializable, Cloneable {
   public Set<String> stripTypePrefixes;
 
   /** Custom passes */
-  public transient
+  protected transient
       Multimap<CustomPassExecutionTime, CompilerPass> customPasses;
 
   /** Mark no side effect calls */
@@ -668,9 +744,6 @@ public class CompilerOptions implements Serializable, Cloneable {
   /** Move top-level function declarations to the top */
   public boolean moveFunctionDeclarations;
 
-  /** Instrument / Intercept memory allocations. */
-  private boolean instrumentMemoryAllocations;
-
   /** Instrumentation template to use with #recordFunctionInformation */
   public String instrumentationTemplate;
 
@@ -686,6 +759,8 @@ public class CompilerOptions implements Serializable, Cloneable {
 
   /** Record function information */
   public boolean recordFunctionInformation;
+
+  public boolean checksOnly;
 
   public boolean generateExports;
 
@@ -739,6 +814,9 @@ public class CompilerOptions implements Serializable, Cloneable {
   //--------------------------------
   // Output options
   //--------------------------------
+
+  /** Do not strip closure-style type annotations from code. */
+  public boolean preserveTypeAnnotations;
 
   /** Output in pretty indented format */
   public boolean prettyPrint;
@@ -863,11 +941,6 @@ public class CompilerOptions implements Serializable, Cloneable {
   String outputCharset;
 
   /**
-   * Whether the named objects types included 'undefined' by default.
-   */
-  boolean looseTypes;
-
-  /**
    * Transitional option.
    */
   boolean enforceAccessControlCodingConventions;
@@ -899,6 +972,8 @@ public class CompilerOptions implements Serializable, Cloneable {
    */
   public boolean instrumentForCoverage;
 
+  /** List of conformance configs to use in CheckConformance */
+  private ImmutableList<ConformanceConfig> conformanceConfigs = ImmutableList.of();
 
   /**
    * Initializes compiler options. All options are disabled by default.
@@ -909,14 +984,18 @@ public class CompilerOptions implements Serializable, Cloneable {
   public CompilerOptions() {
     // Accepted language
     languageIn = LanguageMode.ECMASCRIPT3;
-    languageOut = LanguageMode.ECMASCRIPT3;
+    languageOut = LanguageMode.NO_TRANSPILE;
+
+    // Experimental
+    allowEs6Out = false;
 
     // Language variation
     acceptConstKeyword = false;
+    acceptTypeSyntax = false;
 
     // Checks
+    transpileOnly = false;
     skipAllPasses = false;
-    nameAnonymousFunctionsOnly = false;
     devMode = DevMode.OFF;
     checkDeterminism = false;
     checkSymbols = false;
@@ -924,7 +1003,6 @@ public class CompilerOptions implements Serializable, Cloneable {
     checkSuspiciousCode = false;
     checkTypes = false;
     reportMissingOverride = CheckLevel.OFF;
-    checkRequires = CheckLevel.OFF;
     checkProvides = CheckLevel.OFF;
     checkGlobalNamesLevel = CheckLevel.OFF;
     brokenClosureRequiresLevel = CheckLevel.ERROR;
@@ -938,12 +1016,12 @@ public class CompilerOptions implements Serializable, Cloneable {
     checkEventfulObjectDisposalPolicy = CheckEventfulObjectDisposal.DisposalCheckingPolicy.OFF;
 
     // Optimizations
-    aggressiveRenaming = false;
     foldConstants = false;
     coalesceVariableNames = false;
     deadAssignmentElimination = false;
     inlineConstantVars = false;
     inlineFunctions = false;
+    maxFunctionSizeAfterInlining = UNLIMITED_FUN_SIZE_AFTER_INLINING;
     inlineLocalFunctions = false;
     assumeStrictThis = false;
     assumeClosuresOnlyCaptureReferences = false;
@@ -957,10 +1035,12 @@ public class CompilerOptions implements Serializable, Cloneable {
     smartNameRemoval = false;
     extraSmartNameRemoval = false;
     removeDeadCode = false;
-    extractPrototypeMemberDeclarations = false;
+    extractPrototypeMemberDeclarations =
+        ExtractPrototypeMemberDeclarationsMode.OFF;
     removeUnusedPrototypeProperties = false;
     removeUnusedPrototypePropertiesInExterns = false;
     removeUnusedClassProperties = false;
+    removeUnusedConstructorProperties = false;
     removeUnusedVars = false;
     removeUnusedLocalVars = false;
     aliasExternals = false;
@@ -979,22 +1059,18 @@ public class CompilerOptions implements Serializable, Cloneable {
     // Renaming
     variableRenaming = VariableRenamingPolicy.OFF;
     propertyRenaming = PropertyRenamingPolicy.OFF;
-    propertyAffinity = false;
     labelRenaming = false;
     generatePseudoNames = false;
     shadowVariables = false;
     preferStableNames = false;
     renamePrefix = null;
-    aliasKeywords = false;
     collapseProperties = false;
-    collapsePropertiesOnExternTypes = false;
     collapseObjectLiterals = false;
     devirtualizePrototypeMethods = false;
     disambiguateProperties = false;
     ambiguateProperties = false;
     anonymousFunctionNaming = AnonymousFunctionNamingPolicy.OFF;
     exportTestFunctions = false;
-    gatherExternsFromTypes = true;
     declaredGlobalExternsOnWindow = true;
 
     // Alterations
@@ -1008,6 +1084,7 @@ public class CompilerOptions implements Serializable, Cloneable {
     preserveGoogRequires = false;
     jqueryPass = false;
     angularPass = false;
+    polymerPass = false;
     removeAbstractMethods = true;
     removeClosureAsserts = false;
     stripTypes = Collections.emptySet();
@@ -1016,12 +1093,13 @@ public class CompilerOptions implements Serializable, Cloneable {
     stripTypePrefixes = Collections.emptySet();
     customPasses = null;
     markNoSideEffectCalls = false;
-    defineReplacements = Maps.newHashMap();
+    defineReplacements = new HashMap<>();
     tweakProcessing = TweakProcessing.OFF;
-    tweakReplacements = Maps.newHashMap();
+    tweakReplacements = new HashMap<>();
     moveFunctionDeclarations = false;
     appNameStr = "";
     recordFunctionInformation = false;
+    checksOnly = false;
     generateExports = false;
     exportLocalPropertyDefinitions = false;
     cssRenamingMap = null;
@@ -1031,15 +1109,15 @@ public class CompilerOptions implements Serializable, Cloneable {
     replaceStringsFunctionDescriptions = Collections.emptyList();
     replaceStringsPlaceholderToken = "";
     replaceStringsReservedStrings = Collections.emptySet();
-    propertyInvalidationErrors = Maps.newHashMap();
+    propertyInvalidationErrors = new HashMap<>();
     inputSourceMaps = ImmutableMap.of();
 
     // Instrumentation
     instrumentationTemplate = null;  // instrument functions
-    instrumentMemoryAllocations = false; // instrument allocations
     instrumentForCoverage = false;  // instrument lines
 
     // Output
+    preserveTypeAnnotations = false;
     printInputDelimiter = false;
     prettyPrint = false;
     lineBreak = false;
@@ -1075,6 +1153,21 @@ public class CompilerOptions implements Serializable, Cloneable {
   }
 
   /**
+   * @return Whether to attempt to remove unused constructor properties
+   */
+  public boolean isRemoveUnusedConstructorProperties() {
+    return removeUnusedConstructorProperties;
+  }
+
+  /**
+   * @param removeUnused Whether to attempt to remove
+   *      unused constructor properties
+   */
+  public void setRemoveUnusedConstructorProperties(boolean removeUnused) {
+    this.removeUnusedConstructorProperties = removeUnused;
+  }
+
+  /**
    * Returns the map of define replacements.
    */
   public Map<String, Node> getDefineReplacements() {
@@ -1093,7 +1186,7 @@ public class CompilerOptions implements Serializable, Cloneable {
    */
   private static Map<String, Node> getReplacementsHelper(
       Map<String, Object> source) {
-    Map<String, Node> map = Maps.newHashMap();
+    Map<String, Node> map = new HashMap<>();
     for (Map.Entry<String, Object> entry : source.entrySet()) {
       String name = entry.getKey();
       Object value = entry.getValue();
@@ -1205,6 +1298,17 @@ public class CompilerOptions implements Serializable, Cloneable {
     addWarningsGuard(new DiagnosticGroupWarningsGuard(type, level));
   }
 
+  /**
+   * Configure the given type of warning to the given level.
+   */
+  public void setWarningLevel(String groupName, CheckLevel level) {
+    DiagnosticGroup type = getDiagnosticGroups().forName(groupName);
+    if (type == null) {
+      throw new RuntimeException("Unknown DiagnosticGroup name: " + groupName);
+    }
+    setWarningLevel(type, level);
+  }
+
   WarningsGuard getWarningsGuard() {
     return warningsGuard;
   }
@@ -1242,22 +1346,9 @@ public class CompilerOptions implements Serializable, Cloneable {
     this.propertyRenaming = newPropertyPolicy;
   }
 
-  public void setPropertyAffinity(boolean useAffinity) {
-    this.propertyAffinity = useAffinity;
-  }
-
   /** Should shadow outer scope variable name during renaming. */
   public void setShadowVariables(boolean shadow) {
     this.shadowVariables = shadow;
-  }
-
-  /**
-   * If true, flattens multi-level property names on extern types
-   * (e.g. String$f = x). This should only be used with the typed version of
-   * the externs files.
-   */
-  public void setCollapsePropertiesOnExternTypes(boolean collapse) {
-    collapsePropertiesOnExternTypes = collapse;
   }
 
   /**
@@ -1330,6 +1421,11 @@ public class CompilerOptions implements Serializable, Cloneable {
     }
   }
 
+  public void setMaxFunctionSizeAfterInlining(int funAstSize) {
+    Preconditions.checkArgument(funAstSize > 0);
+    this.maxFunctionSizeAfterInlining = funAstSize;
+  }
+
   /**
    * Set the variable inlining policy for the compiler.
    */
@@ -1388,7 +1484,7 @@ public class CompilerOptions implements Serializable, Cloneable {
       String placeholderToken, List<String> functionDescriptors) {
     this.replaceStringsPlaceholderToken = placeholderToken;
     this.replaceStringsFunctionDescriptions =
-        Lists.newArrayList(functionDescriptors);
+         new ArrayList<>(functionDescriptors);
   }
 
   public void setRemoveAbstractMethods(boolean remove) {
@@ -1397,13 +1493,6 @@ public class CompilerOptions implements Serializable, Cloneable {
 
   public void setRemoveClosureAsserts(boolean remove) {
     this.removeClosureAsserts = remove;
-  }
-
-  /**
-   * If true, name anonymous functions only. All other passes will be skipped.
-   */
-  public void setNameAnonymousFunctionsOnly(boolean value) {
-    this.nameAnonymousFunctionsOnly = value;
   }
 
   public void setColorizeErrorOutput(boolean colorizeErrorOutput) {
@@ -1443,6 +1532,10 @@ public class CompilerOptions implements Serializable, Cloneable {
     this.runtimeTypeCheck = false;
   }
 
+  public void setChecksOnly(boolean checksOnly) {
+    this.checksOnly = checksOnly;
+  }
+
   public void setGenerateExports(boolean generateExports) {
     this.generateExports = generateExports;
   }
@@ -1453,6 +1546,10 @@ public class CompilerOptions implements Serializable, Cloneable {
 
   public void setAngularPass(boolean angularPass) {
     this.angularPass = angularPass;
+  }
+
+  public void setPolymerPass(boolean polymerPass) {
+    this.polymerPass = polymerPass;
   }
 
   public void setCodingConvention(CodingConvention codingConvention) {
@@ -1556,6 +1653,7 @@ public class CompilerOptions implements Serializable, Cloneable {
    * Sets ECMAScript version to use.
    */
   public void setLanguage(LanguageMode language) {
+    Preconditions.checkState(languageIn != LanguageMode.NO_TRANSPILE);
     this.languageIn = language;
     this.languageOut = language;
   }
@@ -1565,6 +1663,7 @@ public class CompilerOptions implements Serializable, Cloneable {
    * transpiling from one version to another, use #setLanguage instead.
    */
   public void setLanguageIn(LanguageMode languageIn) {
+    Preconditions.checkState(languageIn != LanguageMode.NO_TRANSPILE);
     this.languageIn = languageIn;
   }
 
@@ -1581,18 +1680,28 @@ public class CompilerOptions implements Serializable, Cloneable {
   }
 
   public LanguageMode getLanguageOut() {
+    if (languageOut == LanguageMode.NO_TRANSPILE) {
+      return languageIn;
+    }
     return languageOut;
   }
 
   /**
-   * Whether to include "undefined" in the default types.
-   *   For example:
-   *     "{Object}" is normally "Object|null" becomes "Object|null|undefined"
-   *     "{?string}" is normally "string|null" becomes "string|null|undefined"
-   * In either case "!" annotated types excluded both null and undefined.
+   * @return whether we are currently transpiling from ES6 to a lower version.
    */
-  public void setLooseTypes(boolean looseTypes) {
-    this.looseTypes = looseTypes;
+  boolean lowerFromEs6() {
+    return languageOut != LanguageMode.NO_TRANSPILE
+        && languageIn.isEs6OrHigher()
+        && !languageOut.isEs6OrHigher();
+  }
+
+  /**
+   * @return whether we are currently transpiling to ES6_TYPED
+   */
+  boolean raiseToEs6Typed() {
+    return languageOut != LanguageMode.NO_TRANSPILE
+        && !languageIn.isEs6OrHigher()
+        && languageOut == LanguageMode.ECMASCRIPT6_TYPED;
   }
 
   @Override
@@ -1687,7 +1796,7 @@ public class CompilerOptions implements Serializable, Cloneable {
   public void setPropertyInvalidationErrors(
       Map<String, CheckLevel> propertyInvalidationErrors) {
     this.propertyInvalidationErrors =
-        Maps.newHashMap(propertyInvalidationErrors);
+         new HashMap<>(propertyInvalidationErrors);
   }
 
   public void setIdeMode(boolean ideMode) {
@@ -1695,11 +1804,23 @@ public class CompilerOptions implements Serializable, Cloneable {
   }
 
   /**
-   * Whether to keep internal data structures around after we're
-   * finished compiling. We do this by default when IDE mode is on.
+   * Enables or disables the parsing of JSDoc documentation. When IDE mode is
+   * enabled then documentation is always parsed.
+   *
+   * @param parseJsDocDocumentation
+   *           True to enable JSDoc documentation parsing, false to disable it.
    */
-  public void setSaveDataStructures(boolean save) {
-    this.saveDataStructures = save;
+  public void setParseJsDocDocumentation(boolean parseJsDocDocumentation) {
+    this.parseJsDocDocumentation = parseJsDocDocumentation;
+  }
+
+  /**
+   * Checks JSDoc documentation will be parsed.
+   *
+   * @return True when JSDoc documentation will be parsed, false if not.
+   */
+  public boolean isParseJsDocDocumentation() {
+    return this.ideMode || this.parseJsDocDocumentation;
   }
 
   public void setSkipAllPasses(boolean skipAllPasses) {
@@ -1741,10 +1862,6 @@ public class CompilerOptions implements Serializable, Cloneable {
     this.checkMissingGetCssNameBlacklist = blackList;
   }
 
-  public void setAggressiveRenaming(boolean aggressive) {
-    this.aggressiveRenaming = aggressive;
-  }
-
   public void setFoldConstants(boolean foldConstants) {
     this.foldConstants = foldConstants;
   }
@@ -1767,6 +1884,11 @@ public class CompilerOptions implements Serializable, Cloneable {
 
   public void setCrossModuleCodeMotion(boolean crossModuleCodeMotion) {
     this.crossModuleCodeMotion = crossModuleCodeMotion;
+  }
+
+  public void setCrossModuleCodeMotionNoStubMethods(boolean
+      crossModuleCodeMotionNoStubMethods) {
+    this.crossModuleCodeMotionNoStubMethods = crossModuleCodeMotionNoStubMethods;
   }
 
   public void setParentModuleCanSeeSymbolsDeclaredInChildren(
@@ -1812,15 +1934,20 @@ public class CompilerOptions implements Serializable, Cloneable {
   }
 
   public void setExtractPrototypeMemberDeclarations(boolean enabled) {
-    this.extractPrototypeMemberDeclarations = enabled;
+    this.extractPrototypeMemberDeclarations =
+        enabled ? ExtractPrototypeMemberDeclarationsMode.USE_GLOBAL_TEMP
+            : ExtractPrototypeMemberDeclarationsMode.OFF;
+  }
+
+  public void setExtractPrototypeMemberDeclarations(ExtractPrototypeMemberDeclarationsMode mode) {
+    this.extractPrototypeMemberDeclarations = mode;
   }
 
   public void setRemoveUnusedPrototypeProperties(boolean enabled) {
     this.removeUnusedPrototypeProperties = enabled;
   }
 
-  public void setRemoveUnusedPrototypePropertiesInExterns(
-      boolean enabled) {
+  public void setRemoveUnusedPrototypePropertiesInExterns(boolean enabled) {
     this.removeUnusedPrototypePropertiesInExterns = enabled;
   }
 
@@ -1916,12 +2043,12 @@ public class CompilerOptions implements Serializable, Cloneable {
     this.renamePrefix = renamePrefix;
   }
 
-  public void setRenamePrefixNamespace(String renamePrefixNamespace) {
-    this.renamePrefixNamespace = renamePrefixNamespace;
+  public String getRenamePrefixNamespace() {
+    return this.renamePrefixNamespace;
   }
 
-  public void setAliasKeywords(boolean aliasKeywords) {
-    this.aliasKeywords = aliasKeywords;
+  public void setRenamePrefixNamespace(String renamePrefixNamespace) {
+    this.renamePrefixNamespace = renamePrefixNamespace;
   }
 
   public void setCollapseProperties(boolean collapseProperties) {
@@ -2016,6 +2143,10 @@ public class CompilerOptions implements Serializable, Cloneable {
     this.preserveGoogRequires = preserveGoogRequires;
   }
 
+  public void setPreserveTypeAnnotations(boolean preserveTypeAnnotations) {
+    this.preserveTypeAnnotations = preserveTypeAnnotations;
+  }
+
   public void setGatherCssNames(boolean gatherCssNames) {
     this.gatherCssNames = gatherCssNames;
   }
@@ -2036,8 +2167,11 @@ public class CompilerOptions implements Serializable, Cloneable {
     this.stripTypePrefixes = stripTypePrefixes;
   }
 
-  public void setCustomPasses(Multimap<CustomPassExecutionTime, CompilerPass> customPasses) {
-    this.customPasses = customPasses;
+  public void addCustomPass(CustomPassExecutionTime time, CompilerPass customPass) {
+    if (customPasses == null) {
+      customPasses = LinkedHashMultimap.<CustomPassExecutionTime, CompilerPass>create();
+    }
+    customPasses.put(time, customPass);
   }
 
   public void setMarkNoSideEffectCalls(boolean markNoSideEffectCalls) {
@@ -2102,6 +2236,10 @@ public class CompilerOptions implements Serializable, Cloneable {
     this.lineBreak = lineBreak;
   }
 
+  public boolean getPreferLineBreakAtEndOfFile() {
+    return this.preferLineBreakAtEndOfFile;
+  }
+
   public void setPreferLineBreakAtEndOfFile(boolean lineBreakAtEnd) {
     this.preferLineBreakAtEndOfFile = lineBreakAtEnd;
   }
@@ -2118,12 +2256,20 @@ public class CompilerOptions implements Serializable, Cloneable {
     this.errorFormat = errorFormat;
   }
 
+  public ErrorFormat getErrorFormat() {
+    return this.errorFormat;
+  }
+
   public void setWarningsGuard(ComposeWarningsGuard warningsGuard) {
     this.warningsGuard = warningsGuard;
   }
 
   public void setLineLengthThreshold(int lineLengthThreshold) {
     this.lineLengthThreshold = lineLengthThreshold;
+  }
+
+  public int getLineLengthThreshold() {
+    return this.lineLengthThreshold;
   }
 
   public void setExternExports(boolean externExports) {
@@ -2174,26 +2320,29 @@ public class CompilerOptions implements Serializable, Cloneable {
   }
 
   /**
-   * @return Whether memory allocations are instrumented.
-   */
-  public boolean getInstrumentMemoryAllocations() {
-    return instrumentMemoryAllocations;
-  }
-
-  /**
-   * Sets the option to instrument memory allocations.
-   */
-  public void setInstrumentMemoryAllocations(
-      boolean instrumentMemoryAllocations) {
-    this.instrumentMemoryAllocations = instrumentMemoryAllocations;
-  }
-
-  /**
    * Set whether or not code should be modified to provide coverage
    * information.
    */
   public void setInstrumentForCoverage(boolean instrumentForCoverage) {
     this.instrumentForCoverage = instrumentForCoverage;
+  }
+
+  public List<ConformanceConfig> getConformanceConfigs() {
+    return conformanceConfigs;
+  }
+
+  /**
+   * Both enable and configure conformance checks, if non-null.
+   */
+  public void setConformanceConfig(ConformanceConfig conformanceConfig) {
+    this.conformanceConfigs = ImmutableList.of(conformanceConfig);
+  }
+
+  /**
+   * Both enable and configure conformance checks, if non-null.
+   */
+  public void setConformanceConfigs(List<ConformanceConfig> configs) {
+    this.conformanceConfigs = ImmutableList.copyOf(configs);
   }
 
   //////////////////////////////////////////////////////////////////////////////
@@ -2202,46 +2351,66 @@ public class CompilerOptions implements Serializable, Cloneable {
   /** When to do the extra sanity checks */
   public static enum LanguageMode {
     /**
-     * Traditional JavaScript
+     * 90's JavaScript
      */
     ECMASCRIPT3,
 
     /**
-     * Shiny new JavaScript
+     * Traditional JavaScript
      */
     ECMASCRIPT5,
 
     /**
-     * Nitpicky, shiny new JavaScript
+     * Nitpicky, traditional JavaScript
      */
     ECMASCRIPT5_STRICT,
 
     /**
-     * Experimental JavaScript
+     * Shiny new JavaScript
      */
     ECMASCRIPT6,
 
     /**
-     * Nitpicky, experimental JavaScript
+     * Nitpicky, shiny new JavaScript
      */
-    ECMASCRIPT6_STRICT;
+    ECMASCRIPT6_STRICT,
+
+    /**
+     * A superset of ES6 which adds Typescript-style type declarations. Always strict.
+     */
+    ECMASCRIPT6_TYPED,
+
+    /**
+     * For languageOut only. The same language mode as the input.
+     */
+    NO_TRANSPILE;
 
     /** Whether this is a "strict mode" language. */
     public boolean isStrict() {
+      Preconditions.checkState(this != NO_TRANSPILE);
       switch (this) {
         case ECMASCRIPT5_STRICT:
         case ECMASCRIPT6_STRICT:
+        case ECMASCRIPT6_TYPED:
           return true;
         default:
           return false;
       }
     }
 
+    /** Whether this is ECMAScript 5 or higher. */
+    public boolean isEs5OrHigher() {
+      Preconditions.checkState(this != NO_TRANSPILE);
+      return this != LanguageMode.ECMASCRIPT3;
+    }
+
     /** Whether this is ECMAScript 6 or higher. */
     public boolean isEs6OrHigher() {
+      Preconditions.checkState(this != NO_TRANSPILE);
       switch (this) {
         case ECMASCRIPT6:
         case ECMASCRIPT6_STRICT:
+        case ECMASCRIPT6_TYPED:
           return true;
         default:
           return false;
@@ -2265,6 +2434,9 @@ public class CompilerOptions implements Serializable, Cloneable {
         case "ECMASCRIPT3":
         case "ES3":
           return LanguageMode.ECMASCRIPT3;
+        case "ECMASCRIPT6_TYPED":
+        case "ES6_TYPED":
+          return LanguageMode.ECMASCRIPT6_TYPED;
       }
       return null;
     }

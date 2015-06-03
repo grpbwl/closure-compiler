@@ -66,14 +66,14 @@ public class IR {
   }
 
   public static Node paramList(Node param) {
-    Preconditions.checkState(param.isName());
+    Preconditions.checkState(param.isName() || param.isRest());
     return new Node(Token.PARAM_LIST, param);
   }
 
   public static Node paramList(Node ... params) {
     Node paramList = paramList();
     for (Node param : params) {
-      Preconditions.checkState(param.isName());
+      Preconditions.checkState(param.isName() || param.isRest());
       paramList.addChildToBack(param);
     }
     return paramList;
@@ -82,7 +82,7 @@ public class IR {
   public static Node paramList(List<Node> params) {
     Node paramList = paramList();
     for (Node param : params) {
-      Preconditions.checkState(param.isName());
+      Preconditions.checkState(param.isName() || param.isRest());
       paramList.addChildToBack(param);
     }
     return paramList;
@@ -165,7 +165,8 @@ public class IR {
     } else {
       Preconditions.checkState(lhs.isArrayPattern() || lhs.isObjectPattern());
     }
-    Preconditions.checkState(mayBeExpression(value));
+    Preconditions.checkState(mayBeExpression(value),
+        "%s can't be an expression", value);
 
     lhs.addChildToBack(value);
     return new Node(type, lhs);
@@ -361,7 +362,7 @@ public class IR {
   }
 
   public static Node assign(Node target, Node expr) {
-    Preconditions.checkState(isAssignmentTarget(target));
+    Preconditions.checkState(target.isValidAssignmentTarget());
     Preconditions.checkState(mayBeExpression(expr));
     return new Node(Token.ASSIGN, target, expr);
   }
@@ -371,6 +372,10 @@ public class IR {
     Preconditions.checkState(mayBeExpression(trueval));
     Preconditions.checkState(mayBeExpression(falseval));
     return new Node(Token.HOOK, cond, trueval, falseval);
+  }
+
+  public static Node in(Node expr1, Node expr2) {
+    return binaryOp(Token.IN, expr1, expr2);
   }
 
   public static Node comma(Node expr1, Node expr2) {
@@ -401,6 +406,13 @@ public class IR {
    */
   public static Node eq(Node expr1, Node expr2) {
     return binaryOp(Token.EQ, expr1, expr2);
+  }
+
+  /**
+   * "!="
+   */
+  public static Node ne(Node expr1, Node expr2) {
+    return binaryOp(Token.NE, expr1, expr2);
   }
 
   /**
@@ -513,6 +525,26 @@ public class IR {
     return stringKey;
   }
 
+  public static Node rest(String name) {
+    return Node.newString(Token.REST, name);
+  }
+
+  public static Node spread(Node expr) {
+    Preconditions.checkState(mayBeExpression(expr));
+    return new Node(Token.SPREAD, expr);
+  }
+
+  public static Node superNode() {
+    return new Node(Token.SUPER);
+  }
+
+  public static Node memberFunctionDef(String name, Node function) {
+    Preconditions.checkState(function.isFunction());
+    Node member = Node.newString(Token.MEMBER_FUNCTION_DEF, name);
+    member.addChildToBack(function);
+    return member;
+  }
+
   public static Node number(double d) {
     return Node.newNumber(d);
   }
@@ -548,10 +580,6 @@ public class IR {
 
   private static boolean mayBeExpressionOrEmpty(Node n) {
     return n.isEmpty() || mayBeExpression(n);
-  }
-
-  private static boolean isAssignmentTarget(Node n) {
-    return n.isName() || n.isGetProp() || n.isGetElem();
   }
 
   // NOTE: some nodes are neither statements nor expression nodes:
@@ -611,7 +639,8 @@ public class IR {
   private static boolean mayBeExpression(Node n) {
     switch (n.getType()) {
       case Token.FUNCTION:
-        // FUNCTION is used both in expression and statement
+      case Token.CLASS:
+        // FUNCTION and CLASS are used both in expression and statement
         // contexts.
         return true;
 
@@ -669,10 +698,12 @@ public class IR {
       case Token.RSH:
       case Token.SHEQ:
       case Token.SHNE:
+      case Token.SPREAD:
       case Token.STRING:
       case Token.SUB:
-      case Token.THIS:
       case Token.SUPER:
+      case Token.TEMPLATELIT:
+      case Token.THIS:
       case Token.TYPEOF:
       case Token.TRUE:
       case Token.URSH:

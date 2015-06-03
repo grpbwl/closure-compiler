@@ -17,7 +17,6 @@
 package com.google.javascript.jscomp;
 
 import com.google.common.base.Preconditions;
-import com.google.common.collect.Lists;
 import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.JSDocInfo;
@@ -106,7 +105,6 @@ class AngularPass extends AbstractPostOrderCallback
   public void hotSwapScript(Node scriptRoot, Node originalRoot) {
     // Traverses AST looking for nodes annotated with @ngInject.
     NodeTraversal.traverse(compiler, scriptRoot, this);
-    CodingConvention convention = compiler.getCodingConvention();
     boolean codeChanged = false;
     // iterates through annotated nodes adding $inject property to elements.
     for (NodeContext entry : injectables) {
@@ -123,7 +121,7 @@ class AngularPass extends AbstractPostOrderCallback
       Node statement = IR.exprResult(
           IR.assign(
               IR.getelem(
-                  NodeUtil.newQualifiedNameNode(convention, name),
+                  NodeUtil.newQName(compiler, name),
                   IR.string(INJECT_PROPERTY_NAME)),
               dependenciesArray
           )
@@ -134,9 +132,9 @@ class AngularPass extends AbstractPostOrderCallback
       // goog.inherits call.
       Node insertionPoint = entry.getTarget();
       Node next = insertionPoint.getNext();
-      while (next != null &&
-             NodeUtil.isExprCall(next) &&
-             convention.getClassesDefinedByCall(
+      while (next != null
+             && NodeUtil.isExprCall(next)
+             && compiler.getCodingConvention().getClassesDefinedByCall(
                  next.getFirstChild()) != null) {
         insertionPoint = next;
         next = insertionPoint.getNext();
@@ -162,7 +160,7 @@ class AngularPass extends AbstractPostOrderCallback
     if (params != null) {
       return createStringsFromParamList(params);
     }
-    return Lists.newArrayList();
+    return new ArrayList<>();
   }
 
   /**
@@ -172,7 +170,7 @@ class AngularPass extends AbstractPostOrderCallback
    */
   private static List<Node> createStringsFromParamList(Node params) {
     Node param = params.getFirstChild();
-    ArrayList<Node> names = Lists.newArrayList();
+    ArrayList<Node> names = new ArrayList<>();
     while (param != null && param.isName()) {
       names.add(IR.string(param.getString()).srcref(param));
       param = param.getNext();
@@ -257,7 +255,7 @@ class AngularPass extends AbstractPostOrderCallback
    * var z = x = y = function() {}; // FUNCTION node
    * }</pre>
    * @param n VAR node.
-   * @return the assigned intial value, or the rightmost rvalue of an assignment
+   * @return the assigned initial value, or the rightmost rvalue of an assignment
    * chain, or null.
    */
   private static Node getDeclarationRValue(Node n) {

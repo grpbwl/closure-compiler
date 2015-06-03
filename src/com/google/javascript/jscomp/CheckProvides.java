@@ -15,17 +15,17 @@
  */
 package com.google.javascript.jscomp;
 
-import com.google.common.collect.Maps;
 import com.google.javascript.jscomp.NodeTraversal.AbstractShallowCallback;
 import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.JSDocInfo.Visibility;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
 
+import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Insures '@constructor X' has a 'goog.provide("X")' .
+ * Ensures that '@constructor X' has a 'goog.provide("X")' .
  *
  */
 class CheckProvides implements HotSwapCompilerPass {
@@ -56,8 +56,8 @@ class CheckProvides implements HotSwapCompilerPass {
   }
 
   private class CheckProvidesCallback extends AbstractShallowCallback {
-    private final Map<String, Node> provides = Maps.newHashMap();
-    private final Map<String, Node> ctors = Maps.newHashMap();
+    private final Map<String, Node> provides = new HashMap<>();
+    private final Map<String, Node> ctors = new HashMap<>();
     private final CodingConvention convention;
 
     CheckProvidesCallback(CodingConvention convention){
@@ -110,6 +110,11 @@ class CheckProvides implements HotSwapCompilerPass {
         String ctor = ctorEntry.getKey();
         int index = -1;
         boolean found = false;
+
+        if (ctor.startsWith("$jscomp.")) {
+          continue;
+        }
+
         do {
           index = ctor.indexOf('.', index + 1);
           String provideKey = index == -1 ? ctor : ctor.substring(0, index);

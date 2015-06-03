@@ -17,8 +17,13 @@
 
 package com.google.javascript.jscomp;
 
+import static com.google.common.truth.Truth.assertThat;
+
+import com.google.common.base.Joiner;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.rhino.testing.BaseJSTypeTestCase;
+
+import java.util.Arrays;
 
 abstract class CompilerTypeTestCase extends BaseJSTypeTestCase {
 
@@ -62,7 +67,11 @@ abstract class CompilerTypeTestCase extends BaseJSTypeTestCase {
 
   /** A default set of externs for testing. */
   static final String DEFAULT_EXTERNS =
-      "/** @constructor \n * @param {*=} opt_value */ " +
+      "/**\n" +
+      " * @constructor\n" +
+      " * @param {*=} opt_value\n" +
+      " * @return {!Object}\n" +
+      " */\n" +
       "function Object(opt_value) {}" +
       "/** @constructor \n * @param {*} var_args */ " +
       "function Function(var_args) {}" +
@@ -74,7 +83,12 @@ abstract class CompilerTypeTestCase extends BaseJSTypeTestCase {
       "/** @param {number} sliceArg */\n" +
       "String.prototype.slice = function(sliceArg) {};" +
       "/** @type {number} */ String.prototype.length;" +
-      "/** @constructor \n * @param {*} var_args \n @return {!Array} */" +
+      "/**\n" +
+      " * @template T\n" +
+      " * @constructor\n" +
+      " * @param {*} var_args\n" +
+      " * @return {!Array.<?>}\n" +
+      " */\n" +
       "function Array(var_args) {}\n" +
       "/** @type {number} */ Array.prototype.length;\n" +
       "/**\n" +
@@ -105,12 +119,30 @@ abstract class CompilerTypeTestCase extends BaseJSTypeTestCase {
         DiagnosticGroups.MISPLACED_TYPE_ANNOTATION, CheckLevel.WARNING);
     options.setWarningLevel(
         DiagnosticGroups.INVALID_CASTS, CheckLevel.WARNING);
+    options.setWarningLevel(DiagnosticGroups.LINT_CHECKS, CheckLevel.WARNING);
     options.setCodingConvention(getCodingConvention());
     return options;
   }
 
   protected CodingConvention getCodingConvention() {
     return new GoogleCodingConvention();
+  }
+
+  protected void checkReportedWarningsHelper(String[] expected) {
+    JSError[] warnings = compiler.getWarnings();
+    for (String element : expected) {
+      if (element != null) {
+        assertThat(warnings.length).named("Number of warnings").isGreaterThan(0);
+        assertThat(warnings[0].description).isEqualTo(element);
+        warnings =
+            Arrays.asList(warnings)
+                .subList(1, warnings.length)
+                .toArray(new JSError[warnings.length - 1]);
+      }
+    }
+    if (warnings.length > 0) {
+      fail("unexpected warnings(s):\n" + Joiner.on("\n").join(warnings));
+    }
   }
 
   @Override

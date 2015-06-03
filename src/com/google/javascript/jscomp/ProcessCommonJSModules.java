@@ -17,14 +17,13 @@ package com.google.javascript.jscomp;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
 import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
 import com.google.javascript.jscomp.NodeTraversal.AbstractPreOrderCallback;
-import com.google.javascript.jscomp.Scope.Var;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
@@ -37,8 +36,7 @@ import java.util.regex.Pattern;
  * goog.provide and goog.require are emitted for closure compiler automatic
  * ordering.
  */
-public class ProcessCommonJSModules implements CompilerPass {
-  private static final String MODULE_SLASH = ES6ModuleLoader.MODULE_SLASH;
+public final class ProcessCommonJSModules implements CompilerPass {
   public static final String DEFAULT_FILENAME_PREFIX =
       "." + ES6ModuleLoader.MODULE_SLASH;
 
@@ -47,47 +45,53 @@ public class ProcessCommonJSModules implements CompilerPass {
 
   private static final String EXPORTS = "exports";
 
-  static final DiagnosticType LOAD_ERROR = DiagnosticType.error(
-      "JSC_ES6_MODULE_LOAD_ERROR",
-      "Failed to load module \"{0}\"");
-
   private final Compiler compiler;
   private final ES6ModuleLoader loader;
   private final boolean reportDependencies;
-  private final boolean overrideModule;
-  private JSModule module;
 
-  private boolean dontProcess;
-
-  ProcessCommonJSModules(Compiler compiler, ES6ModuleLoader loader) {
-    this(compiler, loader, true, true);
+  /**
+   * Creates a new ProcessCommonJSModules instance which can be used to
+   * rewrite CommonJS modules to a concatenable form.
+   *
+   * @param compiler The compiler
+   * @param loader The module loader which is used to locate CommonJS modules
+   */
+  public ProcessCommonJSModules(Compiler compiler, ES6ModuleLoader loader) {
+    this(compiler, loader, true);
   }
 
-  ProcessCommonJSModules(Compiler compiler, ES6ModuleLoader loader,
-      boolean reportDependencies, boolean overrideModule) {
+  /**
+   * Creates a new ProcessCommonJSModules instance which can be used to
+   * rewrite CommonJS modules to a concatenable form.
+   *
+   * @param compiler The compiler
+   * @param loader The module loader which is used to locate CommonJS modules
+   * @param reportDependencies Whether the rewriter should report dependency
+   *     information to the Closure dependency manager. This needs to be true
+   *     if we want to sort CommonJS module inputs correctly. Note that goog.provide
+   *     and goog.require calls will still be generated if this argument is
+   *     false.
+   */
+  public ProcessCommonJSModules(Compiler compiler, ES6ModuleLoader loader,
+      boolean reportDependencies) {
     this.compiler = compiler;
     this.loader = loader;
     this.reportDependencies = reportDependencies;
-    this.overrideModule = overrideModule;
   }
 
   @Override
   public void process(Node externs, Node root) {
-    dontProcess = false;
-    NodeTraversal.traverse(compiler, root, new FindGoogProvideAndGoogModule());
-    if (dontProcess) {
+    FindGoogProvideOrGoogModule finder = new FindGoogProvideOrGoogModule();
+    NodeTraversal.traverse(compiler, root, finder);
+    if (finder.found) {
       return;
     }
     NodeTraversal
         .traverse(compiler, root, new ProcessCommonJsModulesCallback());
   }
 
-  /**
-   * For every file that is being processed this returns the module that
-   * created for it.
-   */
-  JSModule getModule() {
-    return module;
+  String inputToModuleName(CompilerInput input) {
+    return toModuleName(loader.getLoadAddress(input));
   }
 
   /**
@@ -97,8 +101,8 @@ public class ProcessCommonJSModules implements CompilerPass {
    */
   public static String toModuleName(String filename) {
     return MODULE_NAME_PREFIX +
-        filename.replaceAll("^\\." + Pattern.quote(MODULE_SLASH), "")
-            .replaceAll(Pattern.quote(MODULE_SLASH), MODULE_NAME_SEPARATOR)
+        filename.replaceAll("^\\." + Pattern.quote(ES6ModuleLoader.MODULE_SLASH), "")
+            .replaceAll(Pattern.quote(ES6ModuleLoader.MODULE_SLASH), MODULE_NAME_SEPARATOR)
             .replaceAll(Pattern.quote("\\"), MODULE_NAME_SEPARATOR)
             .replaceAll("\\.js$", "")
             .replaceAll("-", "_")
@@ -111,7 +115,14 @@ public class ProcessCommonJSModules implements CompilerPass {
    *
    * TODO(moz): Let ES6, CommonJS and goog.provide live happily together.
    */
-  private class FindGoogProvideAndGoogModule extends AbstractPreOrderCallback {
+  static class FindGoogProvideOrGoogModule extends AbstractPreOrderCallback {
+
+    private boolean found;
+
+    boolean isFound() {
+      return found;
+    }
+
     @Override
     public boolean shouldTraverse(NodeTraversal nodeTraversal, Node n, Node parent) {
       // Shallow traversal, since we don't need to inspect within function declarations.
@@ -122,7 +133,7 @@ public class ProcessCommonJSModules implements CompilerPass {
           if (maybeGetProp != null
               && (maybeGetProp.matchesQualifiedName("goog.provide")
                   || maybeGetProp.matchesQualifiedName("goog.module"))) {
-            dontProcess = true;
+            found = true;
             return false;
           }
         }
@@ -139,8 +150,8 @@ public class ProcessCommonJSModules implements CompilerPass {
       AbstractPostOrderCallback {
 
     private int scriptNodeCount = 0;
-    private List<Node> moduleExportRefs = Lists.newArrayList();
-    private List<Node> exportRefs = Lists.newArrayList();
+    private List<Node> moduleExportRefs = new ArrayList<>();
+    private List<Node> exportRefs = new ArrayList<>();
 
     @Override
     public void visit(NodeTraversal t, Node n, Node parent) {
@@ -178,7 +189,7 @@ public class ProcessCommonJSModules implements CompilerPass {
       try {
         loader.load(loadAddress);
       } catch (ES6ModuleLoader.LoadFailedException e) {
-        t.makeError(require, LOAD_ERROR, requireName);
+        t.makeError(require, ES6ModuleLoader.LOAD_ERROR, requireName);
       }
 
       String moduleName = toModuleName(loadAddress);
@@ -204,7 +215,7 @@ public class ProcessCommonJSModules implements CompilerPass {
           "ProcessCommonJSModules supports only one invocation per " +
           "CompilerInput / script node");
 
-      String moduleName = toModuleName(loader.getLoadAddress(t.getInput()));
+      String moduleName = inputToModuleName(t.getInput());
 
       // Rename vars to not conflict in global scope.
       NodeTraversal.traverse(compiler, script, new SuffixVarsCallback(
@@ -219,11 +230,6 @@ public class ProcessCommonJSModules implements CompilerPass {
       if (reportDependencies) {
         CompilerInput ci = t.getInput();
         ci.addProvide(moduleName);
-        JSModule m = new JSModule(moduleName);
-        if (overrideModule) {
-          m.addAndOverrideModule(ci);
-        }
-        module = m;
       }
       script.addChildToFront(IR.exprResult(
           IR.call(IR.getprop(IR.name("goog"), IR.string("provide")),
@@ -269,7 +275,7 @@ public class ProcessCommonJSModules implements CompilerPass {
         // it's an alias, and if it is, copy the annotation over.
         // This is a common idiom to export a set of constructors.
         if (rhsValue.isObjectLit()) {
-          Scope globalScope = new SyntacticScopeCreator(compiler)
+          Scope globalScope = SyntacticScopeCreator.makeUntyped(compiler)
               .createScope(script, null);
           for (Node key = rhsValue.getFirstChild();
                key != null; key = key.getNext()) {
@@ -423,7 +429,7 @@ public class ProcessCommonJSModules implements CompilerPass {
           return;
         }
 
-        Scope.Var var = t.getScope().getVar(name);
+        Var var = t.getScope().getVar(name);
         if (var != null && var.isGlobal()) {
           n.setString(name + "$$" + suffix);
           n.putProp(Node.ORIGINALNAME_PROP, name);
@@ -438,7 +444,7 @@ public class ProcessCommonJSModules implements CompilerPass {
       if (typeNode.isString()) {
         String name = typeNode.getString();
         if (ES6ModuleLoader.isRelativeIdentifier(name)) {
-          int lastSlash = name.lastIndexOf("/");
+          int lastSlash = name.lastIndexOf('/');
           int endIndex = name.indexOf('.', lastSlash);
           String localTypeName = null;
           if (endIndex == -1) {
@@ -450,7 +456,7 @@ public class ProcessCommonJSModules implements CompilerPass {
           String moduleName = name.substring(0, endIndex);
           String loadAddress = loader.locate(moduleName, t.getInput());
           if (loadAddress == null) {
-            t.makeError(typeNode, LOAD_ERROR, moduleName);
+            t.makeError(typeNode, ES6ModuleLoader.LOAD_ERROR, moduleName);
             return;
           }
 
@@ -465,7 +471,7 @@ public class ProcessCommonJSModules implements CompilerPass {
             endIndex = name.length();
           }
           String baseName = name.substring(0, endIndex);
-          Scope.Var var = t.getScope().getVar(baseName);
+          Var var = t.getScope().getVar(baseName);
           if (var != null && var.isGlobal()) {
             typeNode.setString(baseName + "$$" + suffix + name.substring(endIndex));
             typeNode.putProp(Node.ORIGINALNAME_PROP, name);

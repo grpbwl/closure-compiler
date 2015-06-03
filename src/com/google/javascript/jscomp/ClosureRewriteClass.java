@@ -18,8 +18,6 @@ package com.google.javascript.jscomp;
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Sets;
 import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.JSDocInfo;
@@ -30,6 +28,7 @@ import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -95,10 +94,8 @@ class ClosureRewriteClass extends AbstractPostOrderCallback
 
   @Override
   public void visit(NodeTraversal t, Node n, Node parent) {
-    if (n.isCall() && isGoogDefineClass(n)) {
-      if (!validateUsage(n)) {
-        compiler.report(JSError.make(n, GOOG_CLASS_TARGET_INVALID));
-      }
+    if (n.isCall() && isGoogDefineClass(n) && !validateUsage(n)) {
+      compiler.report(JSError.make(n, GOOG_CLASS_TARGET_INVALID));
     }
     maybeRewriteClassDefinition(n);
   }
@@ -327,7 +324,7 @@ class ClosureRewriteClass extends AbstractPostOrderCallback
 
   private static List<MemberDefinition> objectLitToList(
       Node objlit) {
-    List<MemberDefinition> result = Lists.newArrayList();
+    List<MemberDefinition> result = new ArrayList<>();
     for (Node keyNode : objlit.children()) {
       result.add(
           new MemberDefinition(
@@ -339,8 +336,7 @@ class ClosureRewriteClass extends AbstractPostOrderCallback
     return result;
   }
 
-  private void rewriteGoogDefineClass(Node exprRoot, ClassDefinition cls) {
-
+  private void rewriteGoogDefineClass(Node exprRoot, final ClassDefinition cls) {
     // For simplicity add everything into a block, before adding it to the AST.
     Node block = IR.block();
 
@@ -371,8 +367,7 @@ class ClosureRewriteClass extends AbstractPostOrderCallback
       block.addChildToBack(
           fixupSrcref(IR.exprResult(
               IR.call(
-                  NodeUtil.newQualifiedNameNode(
-                      compiler.getCodingConvention(), "goog.inherits")
+                  NodeUtil.newQName(compiler, "goog.inherits")
                       .srcrefTree(cls.superClass),
                   cls.name.cloneTree(),
                   cls.superClass.cloneTree()).srcref(cls.superClass))));
@@ -413,7 +408,27 @@ class ClosureRewriteClass extends AbstractPostOrderCallback
     }
 
     if (cls.classModifier != null) {
-      // example: modifier(ctr)
+      // Inside the modifier function, replace references to the argument
+      // with the class name.
+      //   function(cls) { cls.Foo = bar; }
+      // becomes
+      //   function(cls) { theClassName.Foo = bar; }
+      // The cls parameter is unused, but leave it there so that it
+      // matches the JsDoc.
+      // TODO(tbreisacher): Add a warning if the param is shadowed or reassigned.
+      Node argList = cls.classModifier.getFirstChild().getNext();
+      Node arg = argList.getFirstChild();
+      final String argName = arg.getString();
+      NodeTraversal.traverse(compiler, cls.classModifier.getLastChild(),
+          new AbstractPostOrderCallback() {
+            @Override
+            public void visit(NodeTraversal t, Node n, Node parent) {
+              if (n.isName() && n.getString().equals(argName)) {
+                parent.replaceChild(n, cls.name.cloneTree());
+              }
+            }
+          });
+
       block.addChildToBack(
           IR.exprResult(
               fixupFreeCall(
@@ -459,11 +474,11 @@ class ClosureRewriteClass extends AbstractPostOrderCallback
     // avoid null checks
     JSDocInfo classInfo = (cls.classInfo != null)
         ? cls.classInfo
-        : new JSDocInfo(true);
+        : new JSDocInfoBuilder(true).build(true);
 
     JSDocInfo ctorInfo = (cls.constructor.info != null)
         ? cls.constructor.info
-        : new JSDocInfo(true);
+        : new JSDocInfoBuilder(true).build(true);
 
     Node superNode = cls.superClass;
 
@@ -481,7 +496,7 @@ class ClosureRewriteClass extends AbstractPostOrderCallback
     }
 
     // merge suppressions
-    Set<String> suppressions = Sets.newHashSet();
+    Set<String> suppressions = new HashSet<>();
     suppressions.addAll(classInfo.getSuppressions());
     suppressions.addAll(ctorInfo.getSuppressions());
     if (!suppressions.isEmpty()) {
@@ -550,8 +565,11 @@ class ClosureRewriteClass extends AbstractPostOrderCallback
         mergedInfo.recordStruct();
       }
 
-      // a "super" implies @extends
-      if (superNode != null) {
+
+      if (classInfo.getBaseType() != null) {
+        mergedInfo.recordBaseType(classInfo.getBaseType());
+      } else if (superNode != null) {
+        // a "super" implies @extends, build a default.
         JSTypeExpression baseType = new JSTypeExpression(
             new Node(Token.BANG,
               IR.string(superNode.getQualifiedName())),
@@ -573,6 +591,6 @@ class ClosureRewriteClass extends AbstractPostOrderCallback
     for (String typeName : templateNames) {
       mergedInfo.recordTemplateTypeName(typeName);
     }
-    return mergedInfo.build(associatedNode);
+    return mergedInfo.build();
   }
 }

@@ -54,10 +54,21 @@ class RhinoErrorReporter {
   static final DiagnosticType BAD_JSDOC_ANNOTATION =
       DiagnosticType.warning("JSC_BAD_JSDOC_ANNOTATION", "Parse error. {0}");
 
+  static final DiagnosticType JSDOC_IN_BLOCK_COMMENT =
+      DiagnosticType.warning("JSC_JSDOC_IN_BLOCK_COMMENT", "Parse error. {0}");
+
   static final DiagnosticType MISPLACED_TYPE_ANNOTATION =
       DiagnosticType.warning("JSC_MISPLACED_TYPE_ANNOTATION",
           "Type annotations are not allowed here. " +
           "Are you missing parentheses?");
+
+  static final DiagnosticType MISPLACED_FUNCTION_ANNOTATION =
+      DiagnosticType.warning("JSC_MISPLACED_FUNCTION_ANNOTATION",
+          "Misplaced function annotation.");
+
+  static final DiagnosticType MISPLACED_MSG_ANNOTATION =
+      DiagnosticType.disabled("JSC_MISPLACED_MSG_ANNOTATION",
+          "Misplaced message annotation.");
 
   static final DiagnosticType INVALID_ES3_PROP_NAME = DiagnosticType.warning(
       "JSC_INVALID_ES3_PROP_NAME",
@@ -78,6 +89,9 @@ class RhinoErrorReporter {
       DiagnosticType.error("ES6_FEATURE",
           "{0}. Use --language_in=ECMASCRIPT6 or ECMASCRIPT6_STRICT " +
           "to enable ES6 features.");
+
+  static final DiagnosticType ANNOTATION_DEPRECATED =
+      DiagnosticType.warning("JSC_ANNOTATION_DEPRECATED", "{0}");
 
   // A map of Rhino messages to their DiagnosticType.
   private final Map<Pattern, DiagnosticType> typeMap;
@@ -114,11 +128,23 @@ class RhinoErrorReporter {
             SimpleErrorReporter.getMessage0("msg.bad.jsdoc.tag")),
             BAD_JSDOC_ANNOTATION)
 
+        .put(Pattern.compile(
+            "^\\QNon-JSDoc comment has annotations. " +
+            "Did you mean to start it with '/**'?\\E"),
+            JSDOC_IN_BLOCK_COMMENT)
+
         // Unexpected @type annotations
         .put(Pattern.compile("^Type annotations are not allowed here.*"),
             MISPLACED_TYPE_ANNOTATION)
 
-        // Unexpected @type annotations
+        // Unexpected function JsDoc
+        .put(Pattern.compile("^This JSDoc is not attached to a function node.*"),
+            MISPLACED_FUNCTION_ANNOTATION)
+
+        // Unexpected @desc JsDoc
+        .put(Pattern.compile("^@desc, @hidden, and @meaning annotations.*"),
+            MISPLACED_MSG_ANNOTATION)
+
         .put(Pattern.compile("^Keywords and reserved words" +
             " are not allowed as unquoted property.*"),
             INVALID_ES3_PROP_NAME)
@@ -138,6 +164,10 @@ class RhinoErrorReporter {
 
         .put(Pattern.compile("^this language feature is only supported in es6 mode.*"),
             ES6_FEATURE)
+
+        // Deprecated annotations
+        .put(Pattern.compile("^The @[a-z]+ annotation is deprecated\\..*"),
+            ANNOTATION_DEPRECATED)
 
         .build();
   }
